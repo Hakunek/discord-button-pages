@@ -1,61 +1,125 @@
-const { MessageActionRow, MessageButton } = require('discord-buttons');
-const wait = require('util').promisify(setTimeout);
+const { InteractionResponse, User, ButtonInteraction } = require("discord.js");
+
+const wait = require("util").promisify(setTimeout);
+/** Type for responses
+ * @typedef {Object} EmbedResponses
+ * @property {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]}    embeds          - Array of embeds
+ * @property {number}                                                                                                   currentPage     - The page that the user is currently on
+ * @property {number}                                                                                                   duration        - Duration
+ * @property {User}                                                                                user            - User object.
+ * @property {Number}                                                                                                   buttonStartTime - When it starts.
+ * @property {import("discord.js").ActionRowData}                                                                       row      - Buttons used.
+ * @property {string}                                                                                                   messageId      - Buttons used.
+ */
+
+/** @type {Map<string,EmbedResponses>}*/
+const pages = new Map();
 
 module.exports = {
-    createPages: async (interaction, message, embeds, duration, buttonStyle, rightEmoji, leftEmoji, cancelEmoji) => {
-        if (!['red', 'green', 'blurple'].includes(buttonStyle)) throw new TypeError(`Button style provided is not valid. Valid options: red, green, blurple`);
-        if (!rightEmoji) throw new TypeError(`An emoji to go to the next page was not provided.`);
-        if (!leftEmoji) throw new TypeError(`An emoji to go to the previous page was not provided.`);
-        if (!leftEmoji) throw new TypeError(`An emoji to go cancel the embed page was not provided.`);
+  /**
+   *
+   * @param {ButtonInteraction} interaction
+   * @param {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]}   embeds
+   * @param {Number}                                                                                                  duration
+   * @param {import("discord.js").InteractionButtonComponentData}                                                     rightButton
+   * @param {import("discord.js").InteractionButtonComponentData}                                                     leftButton
+   * @param {import("discord.js").InteractionButtonComponentData}                                                     cancelButton
+   * @returns {Promise<void>}
+   */
+  createPages: async (
+    interaction,
+    embeds,
+    duration,
+    rightButton,
+    leftButton,
+    cancelButton
+  ) => {
+    if (!rightButton)
+      throw new TypeError(`A button to go to the next page was not provided.`);
+    if (!leftButton)
+      throw new TypeError(
+        `A button to go to the previous page was not provided.`
+      );
+    if (!cancelButton)
+      throw new TypeError(
+        `A button to go cancel the embed page was not provided.`
+      );
 
-        const fowardButton = new MessageButton()
-            .setLabel("")
-            .setStyle(buttonStyle)
-            .setEmoji(rightEmoji)
-            .setID('next-page');
+    const interactiveButtons = {
+      type: 1,
+      components: [rightButton, cancelButton, leftButton],
+    };
 
-        const backButton = new MessageButton()
-            .setLabel("")
-            .setStyle(buttonStyle)
-            .setEmoji(leftEmoji)
-            .setID('back-page');
+    const msg = (await interaction.channel?.send({
+      components: [interactiveButtons],
+      embeds: [embeds[0]],
+    })) || { id: "" };
 
-        const deleteButton = new MessageButton()
-            .setLabel("")
-            .setStyle(buttonStyle)
-            .setEmoji(cancelEmoji)
-            .setID('delete-page');
+    let response = {
+      embeds: embeds,
+      currentPage: 0,
+      duration: duration,
+      user: interaction.user,
+      buttonStartTime: Date.now(),
+      row: interactiveButtons,
+      messageId: msg.id,
+    };
+    pages.set(msg.id, response);
+  },
 
-        const interactiveButtons = new MessageActionRow()
-            .addComponent(backButton)
-            .addComponent(deleteButton)
-            .addComponent(fowardButton);
-
-        const msg = await message.channel.send({ components: [interactiveButtons], embed: embeds[0] });
-        interaction.message = msg;
-        interaction.embeds = embeds;
-        interaction.currentPage = 0;
-        interaction.duration = duration;
-        interaction.interactor = message.author;
-        interaction.buttonStartTime = Date.now();
-        interaction.components = interactiveButtons;
-    },
-
-    buttonInteractions: async (button, interaction) => {
-        if (interaction.interactor !== button.clicker.user || Date.now - interaction.buttonStartTime >= interaction.duration || button.message.id !== interaction.message.id) return;
-        if (button.id == 'next-page') {
-            (interaction.currentPage + 1 == interaction.embeds.length ? interaction.currentPage = 0 : interaction.currentPage += 1);
-            interaction.message.edit({ embed: interaction.embeds[interaction.currentPage], components: [interaction.components] });
-            button.reply.defer(true);
-        } else if (button.id == 'back-page') {
-            (interaction.currentPage - 1 < 0 ? interaction.currentPage = interaction.embeds.length - 1 : interaction.currentPage -= 1);
-            interaction.message.edit({ embed: interaction.embeds[interaction.currentPage], components: [interaction.components] });
-            button.reply.defer(true);
-        } else if (button.id == 'delete-page') {
-            interaction.message.edit(`:white_check_mark: Interaction ended.`);
-            wait(5000).then(async () => {
-                await interaction.message.delete();
-            });
-        }
+  /**
+   *
+   * @param {import("discord.js").ButtonInteraction} interaction
+   * @returns {Promise<void|boolean|InteractionResponse>}
+   */
+  buttonInteraction: async (interaction) => {
+    const responses = pages.get(interaction.message.id);
+    if (!responses || interaction.user.id != responses.user.id) return false;
+    if (Date.now() - responses.buttonStartTime >= responses.duration) {
+      return true;
     }
+    switch (interaction.customId) {
+      case "next-page":
+        responses.currentPage =
+          responses.currentPage + 1 < responses.embeds.length
+            ? (responses.currentPage += 1)
+            : (responses.currentPage = 0);
+        await interaction.update({
+          embeds: [responses.embeds[responses.currentPage]],
+        });
+        pages.set(interaction.message.id, responses);
+        break;
+      case "back-page":
+        responses.currentPage =
+          responses.currentPage > 0
+            ? (responses.currentPage -= 1)
+            : (responses.currentPage = responses.embeds.length - 1);
+        await interaction.update({
+          embeds: [responses.embeds[responses.currentPage]],
+        });
+        break;
+      case "delete-page":
+        await interaction.message.edit(`:white_check_mark: Interaction ended.`);
+        wait(5000).then(async () => {
+          await interaction.message.delete();
+        });
+        break;
+    }
+  },
+  /**
+   *
+   * @param {ButtonInteraction} interaction
+   * @returns
+   */
+  endPages: async (interaction) => {
+    const responses = pages.get(interaction.message.id);
+    if (!responses) return;
+    pages.delete(interaction.message.id);
+    await interaction.update({
+      components: responses.row.components.map((e) => ({
+        ...e,
+        disabled: true,
+      })),
+    });
+  },
 };
