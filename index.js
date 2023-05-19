@@ -1,38 +1,72 @@
-const { InteractionResponse, User, ButtonInteraction } = require("discord.js");
+const {
+  ChatInputCommandInteraction,
+  ButtonStyle,
+  InteractionResponse,
+  User,
+  ButtonInteraction,
+} = require("discord.js");
 
-const wait = require("util").promisify(setTimeout);
+const sleep = require("util").promisify(setTimeout);
+
+/**
+ * @typedef {Object} ButtonLabel
+ * @property {ButtonStyle.Primary|ButtonStyle.Danger|ButtonStyle.Secondary|ButtonStyle.Success} style
+ * @property {String} customId
+ * @property {String} label
+ * @property {boolean} [disabled]
+ * @property {2} type
+ */
+/**
+ * @typedef {Object} ButtonEmoji
+ * @property {ButtonStyle.Primary|ButtonStyle.Danger|ButtonStyle.Secondary|ButtonStyle.Success} style
+ * @property {String} customId
+ * @property {String} emoji
+ * @property {boolean} [disabled]
+ * @property {2} type
+ */
+/**
+ * @typedef {Object} ButtonLabelEmoji
+ * @property {ButtonStyle.Primary|ButtonStyle.Danger|ButtonStyle.Secondary|ButtonStyle.Success} style
+ * @property {String} customId
+ * @property {String} label
+ * @property {String} emoji
+ * @property {boolean} [disabled]
+ * @property {2} type
+ */
+
 /** Type for responses
  * @typedef {Object} EmbedResponses
- * @property {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]}    embeds          - Array of embeds
- * @property {number}                                                                                                   currentPage     - The page that the user is currently on
- * @property {number}                                                                                                   duration        - Duration
- * @property {User}                                                                                user            - User object.
- * @property {Number}                                                                                                   buttonStartTime - When it starts.
- * @property {import("discord.js").ActionRowData}                                                                       row      - Buttons used.
- * @property {string}                                                                                                   messageId      - Buttons used.
+ * @property {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]} embeds - Array of embeds
+ * @property {number} currentPage - The page that the user is currently on
+ * @property {number} duration - Duration
+ * @property {User} user - User object.
+ * @property {Number} buttonStartTime - When it starts.
+ * @property {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} previous
+ * @property {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} close
+ * @property {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} next
+ * @property {string} messageId - Buttons used.
  */
 
 /** @type {Map<string,EmbedResponses>}*/
 const pages = new Map();
 
 module.exports = {
-  /**
-   *
-   * @param {ButtonInteraction} interaction
-   * @param {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]}   embeds
-   * @param {Number}                                                                                                  duration
-   * @param {import("discord.js").InteractionButtonComponentData}                                                     rightButton
-   * @param {import("discord.js").InteractionButtonComponentData}                                                     leftButton
-   * @param {import("discord.js").InteractionButtonComponentData}                                                     cancelButton
+  /** Needed to be used when creating pages
+   * @param {ChatInputCommandInteraction} interaction
+   * @param {(import("discord.js").APIEmbed | import("discord.js").JSONEncodable<import("discord.js").APIEmbed>)[]} embeds
+   * @param {Number} duration
+   * @param {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} leftButton
+   * @param {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} closeButton
+   * @param {ButtonLabel|ButtonLabelEmoji|ButtonEmoji} rightButton
    * @returns {Promise<void>}
    */
   createPages: async (
     interaction,
     embeds,
     duration,
-    rightButton,
     leftButton,
-    cancelButton
+    closeButton,
+    rightButton
   ) => {
     if (!rightButton)
       throw new TypeError(`A button to go to the next page was not provided.`);
@@ -40,18 +74,27 @@ module.exports = {
       throw new TypeError(
         `A button to go to the previous page was not provided.`
       );
-    if (!cancelButton)
+    if (!closeButton)
       throw new TypeError(
         `A button to go cancel the embed page was not provided.`
       );
 
+    rightButton.type = 2;
+    closeButton.type = 2;
+    leftButton.type = 2;
+
     const interactiveButtons = {
       type: 1,
-      components: [rightButton, cancelButton, leftButton],
+      components: [rightButton, closeButton, leftButton],
     };
 
     const msg = (await interaction.channel?.send({
-      components: [interactiveButtons],
+      components: [
+        {
+          type: 1,
+          components: [rightButton],
+        },
+      ],
       embeds: [embeds[0]],
     })) || { id: "" };
 
@@ -61,7 +104,9 @@ module.exports = {
       duration: duration,
       user: interaction.user,
       buttonStartTime: Date.now(),
-      row: interactiveButtons,
+      previous: leftButton,
+      close: closeButton,
+      next: rightButton,
       messageId: msg.id,
     };
     pages.set(msg.id, response);
@@ -100,7 +145,7 @@ module.exports = {
         break;
       case "delete-page":
         await interaction.message.edit(`:white_check_mark: Interaction ended.`);
-        wait(5000).then(async () => {
+        sleep(5000).then(async () => {
           await interaction.message.delete();
         });
         break;
@@ -115,11 +160,15 @@ module.exports = {
     const responses = pages.get(interaction.message.id);
     if (!responses) return;
     pages.delete(interaction.message.id);
+    responses.previous.disabled = true;
+    responses.close.disabled = true;
+    responses.next.disabled = true;
+    const row = {
+      type: 1,
+      components: [responses.previous, responses.close, responses.next],
+    };
     await interaction.update({
-      components: responses.row.components.map((e) => ({
-        ...e,
-        disabled: true,
-      })),
+      components: [row],
     });
   },
 };
